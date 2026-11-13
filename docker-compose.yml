@@ -45,6 +45,7 @@ services:
   ingest:
     <<: *app
     profiles: ["tools"]
+    environment: []   # ingestion never calls Groq, so it does not receive the key
     command: ["python", "-m", "ingest.run"]
     volumes:
       - ./data:/app/data:ro

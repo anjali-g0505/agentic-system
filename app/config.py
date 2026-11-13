@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     JWT_SECRET: str
     JWT_ALGORITHM: str
     JWT_EXPIRY_MINUTES: int
-    GROQ_API_KEY: str
+    GROQ_API_KEY: str = ""  # validated by require_groq(): only the API needs it, ingestion does not
     GROQ_MODEL_GENERATION: str
     GROQ_MODEL_ROUTING: str
     EMBED_MODEL: str
@@ -31,12 +31,16 @@ def _load() -> Settings:
     except ValidationError as e:
         missing = ", ".join(str(err["loc"][0]) for err in e.errors())
         sys.exit(f"CONFIG ERROR: missing or invalid settings: {missing}. Check .env and docker-compose env_file.")
-    if not s.GROQ_API_KEY.strip():
-        sys.exit("CONFIG ERROR: GROQ_API_KEY is empty. Export it in the shell before `docker compose up` "
-                 "(it is passed through by compose and never written to a file).")
     if "${" in s.DATABASE_URL:
         sys.exit("CONFIG ERROR: DATABASE_URL was not interpolated. Run through docker compose, which expands it.")
     return s
 
 
 settings = _load()
+
+
+def require_groq() -> None:
+    """Called at import time by every module that talks to Groq, so a missing key fails before serving."""
+    if not settings.GROQ_API_KEY.strip():
+        sys.exit("CONFIG ERROR: GROQ_API_KEY is empty. Export it in the shell before `docker compose up` "
+                 "(it is passed through by compose and never written to a file).")
