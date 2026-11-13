@@ -1,0 +1,9 @@
+data/
+.env
+*.duckdb
+chunks.jsonl
+__pycache__/
+*.pyc
+.venv/
+node_modules/
+dist/

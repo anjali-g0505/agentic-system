@@ -1,0 +1,10 @@
+node_modules/
+frontend/
+data/
+.git/
+__pycache__/
+*.pyc
+.venv/
+.env
+*.duckdb
+chunks.jsonl
