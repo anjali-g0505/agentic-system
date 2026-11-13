@@ -8,12 +8,13 @@ from __future__ import annotations
 import json
 import re
 
-from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.prebuilt import ToolNode
 from langgraph.types import RetryPolicy, interrupt
 
+from app import audit
 from app.llm import generator
 from app.masking import scrub
 from app.rbac import principal_from
@@ -70,6 +71,12 @@ def route(state: MessagesState) -> str:
     return "approval" if any(tc["name"] in WRITE_TOOLS for tc in last.tool_calls) else "tools"
 
 
+def declined_this_turn(messages: list) -> bool:
+    last_human = max((i for i, m in enumerate(messages) if isinstance(m, HumanMessage)), default=-1)
+    return any(isinstance(m, ToolMessage) and '"REJECTED_BY_USER"' in str(m.content)
+               for m in messages[last_human + 1:])
+
+
 async def approval(state: MessagesState, config: RunnableConfig) -> dict:
     p = principal_from(config)
     calls = state["messages"][-1].tool_calls
@@ -77,9 +84,14 @@ async def approval(state: MessagesState, config: RunnableConfig) -> dict:
 
     # Interrupt first: everything before interrupt() re-runs on resume, so nothing with a side effect goes here.
     pv = await preview(write_call["name"], write_call["args"], p)
-    if pv["blocked"]:
+    if declined_this_turn(state["messages"]):
+        # A "no" ends the action for this turn: the agent may not immediately ask again with a different action.
+        write_result = json.dumps({"status": "DEFERRED", "message": "The user declined an action this turn. Do not "
+                                   "propose another; explain the options and let the user ask."})
+    elif pv["blocked"]:
         write_result = json.dumps({"status": "BLOCKED", "message": pv["reason"],
                                    "note": "Not shown to the user for confirmation because it cannot succeed."})
+        await audit.record(p, write_call["name"], write_call["args"], "BLOCKED", pv["reason"], None)
     else:
         decision = interrupt({"type": "confirmation", "tool": write_call["name"], "args": write_call["args"],
                               "preview": pv, "requested_by": p.user_id})
@@ -90,6 +102,8 @@ async def approval(state: MessagesState, config: RunnableConfig) -> dict:
         else:
             write_result = json.dumps({"status": "REJECTED_BY_USER",
                                        "message": "The user declined at the confirmation step. Nothing was done."})
+            await audit.record(p, write_call["name"], write_call["args"], "REJECTED_BY_USER",
+                               "declined at confirmation", None)
 
     out = []
     for tc in calls:
@@ -109,7 +123,8 @@ async def finalize(state: MessagesState) -> dict:
     if not isinstance(last, AIMessage):
         return {}
     text = last.content if isinstance(last.content, str) else str(last.content)
-    safe = scrub(text)
+    # gpt-oss sometimes emits its native full-width markers (【1】, 【1†ref】): normalise to [1].
+    safe = re.sub(r"【\s*(\d{1,2})[^】]*】", r"[\1]", scrub(text))
     if REFUND_PROMISE.search(safe):
         safe = REFUND_PROMISE.sub("", safe).strip() + f"\n\n{NO_REFUND_PROMISE}"
     if safe == text:
