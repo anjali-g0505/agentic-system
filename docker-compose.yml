@@ -42,6 +42,16 @@ services:
       retries: 20
     restart: unless-stopped
 
+  frontend:
+    build: ./frontend
+    image: rupay-chargeback-ui:1.0
+    ports:
+      - "3000:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
   ingest:
     <<: *app
     profiles: ["tools"]
